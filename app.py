@@ -3,6 +3,7 @@ import json
 import uuid
 import random
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 from groq import Groq
 from dotenv import load_dotenv
 from db_manager import db
@@ -10,6 +11,7 @@ from db_manager import db
 load_dotenv()
 
 app = Flask(__name__)
+CORS(app) # This will allow all origins
 
 # --- Initialization ---
 
