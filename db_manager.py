@@ -110,7 +110,11 @@ class DatabaseManager:
             return user_data
             
         except sqlite3.IntegrityError:
-            # Email already exists
+            # Email already exists, fetch and return the existing user
+            cursor.execute('SELECT user_id FROM users WHERE email = ?', (email,))
+            existing_user = cursor.fetchone()
+            if existing_user:
+                return self.get_user(existing_user['user_id'])
             return None
         finally:
             self.close()

@@ -99,7 +99,7 @@ Search for restaurants that have specific ingredients available.
 
 #### Create User
 
-Creates a new user in the system.
+Creates a new user or returns an existing user if the email already exists.
 
 - **URL**: `/users`
 - **Method**: `POST`
@@ -107,9 +107,12 @@ Creates a new user in the system.
   ```json
   {
     "username": "string",
-    "email": "string"
+    "email": "string",
+    "orders": []
   }
   ```
+  Note: If a user with the provided email already exists, the API will return the existing user data with a 201 status code instead of an error.
+
 - **Response**: `201 Created`
   ```json
   {

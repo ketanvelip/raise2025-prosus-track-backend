@@ -92,12 +92,12 @@ def get_restaurant_by_id(restaurant_id):
 
 @app.route('/users', methods=['POST'])
 def create_user():
-    """Creates a new user."""
+    """Creates a new user or returns existing user if email already exists."""
     data = request.get_json()
     if not data or 'username' not in data or 'email' not in data:
         return jsonify({'error': 'Missing username or email in request body'}), 400
 
-    # Create user in database
+    # Create user in database or get existing user if email already exists
     user = db.create_user(data['username'], data['email'])
     
     if user:
@@ -105,7 +105,9 @@ def create_user():
         users[user['user_id']] = user
         return jsonify(user), 201
     else:
-        return jsonify({'error': 'Email already exists'}), 400
+        # This should not happen now that we're returning existing users,
+        # but kept as a fallback for unexpected errors
+        return jsonify({'error': 'Failed to create or retrieve user'}), 500
 
 @app.route('/users/<user_id>', methods=['GET'])
 def get_user(user_id):
