@@ -11,7 +11,7 @@ import json
 import sys
 
 # Configuration
-API_BASE_URL = "http://127.0.0.1:5004"
+API_BASE_URL = "http://127.0.0.1:5005"
 HEADERS = {"Content-Type": "application/json"}
 
 def pretty_print_json(data):

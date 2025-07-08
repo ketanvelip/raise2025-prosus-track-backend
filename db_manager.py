@@ -70,6 +70,18 @@ class DatabaseManager:
         )
         ''')
         
+        # Create user notes table for LLM-generated insights
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            note_text TEXT NOT NULL,
+            note_type TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (user_id)
+        )
+        ''')
+        
         conn.commit()
         self.close()
     
@@ -255,6 +267,63 @@ class DatabaseManager:
         
         self.close()
         return preferences
+    
+    # --- User Notes Management ---
+    
+    def add_user_note(self, user_id, note_text, note_type='general'):
+        """Add an LLM-generated note about a user."""
+        conn, cursor = self.connect()
+        
+        try:
+            cursor.execute(
+                'INSERT INTO user_notes (user_id, note_text, note_type) VALUES (?, ?, ?)',
+                (user_id, note_text, note_type)
+            )
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"Error adding user note: {str(e)}")
+            return False
+        finally:
+            self.close()
+    
+    def get_user_notes(self, user_id, note_type=None):
+        """Get all LLM-generated notes for a user, optionally filtered by type."""
+        conn, cursor = self.connect()
+        
+        if note_type:
+            cursor.execute('SELECT id, note_text, note_type, created_at FROM user_notes WHERE user_id = ? AND note_type = ? ORDER BY created_at DESC', 
+                          (user_id, note_type))
+        else:
+            cursor.execute('SELECT id, note_text, note_type, created_at FROM user_notes WHERE user_id = ? ORDER BY created_at DESC', 
+                          (user_id,))
+            
+        note_rows = cursor.fetchall()
+        
+        notes = []
+        for row in note_rows:
+            notes.append({
+                'id': row['id'],
+                'note_text': row['note_text'],
+                'note_type': row['note_type'],
+                'created_at': row['created_at']
+            })
+        
+        self.close()
+        return notes
+    
+    def delete_user_note(self, note_id):
+        """Delete a specific user note."""
+        conn, cursor = self.connect()
+        
+        try:
+            cursor.execute('DELETE FROM user_notes WHERE id = ?', (note_id,))
+            conn.commit()
+            return cursor.rowcount > 0  # Return True if a row was deleted
+        except Exception:
+            return False
+        finally:
+            self.close()
 
 # Create an instance for use in the application
 db = DatabaseManager()

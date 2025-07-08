@@ -2,6 +2,7 @@ import os
 import json
 import uuid
 import random
+import sqlite3
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from groq import Groq
@@ -15,9 +16,9 @@ CORS(app) # This will allow all origins
 
 # --- Initialization ---
 
-# Load restaurant data
-with open('restaurants.json', 'r', encoding='utf-8') as f:
-    restaurants = json.load(f)
+# We now use SQLite for restaurant data
+# This variable will store cached restaurant data for backward compatibility
+restaurants = []
 
 # We now use SQLite for storage via db_manager.py
 # The following dictionaries are kept for backward compatibility during migration
@@ -36,7 +37,51 @@ else:
 
 def get_restaurant_by_id(restaurant_id):
     """Finds a restaurant by its ID."""
-    return next((r for r in restaurants if r.get('restaurant_id') == restaurant_id), None)
+    # First try to get from database
+    conn = sqlite3.connect('uber_eats.db')
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    # Get restaurant
+    cursor.execute('SELECT * FROM restaurants WHERE restaurant_id = ?', (restaurant_id,))
+    restaurant_row = cursor.fetchone()
+    
+    if not restaurant_row:
+        conn.close()
+        # Fall back to in-memory cache
+        return next((r for r in restaurants if r.get('restaurant_id') == restaurant_id), None)
+    
+    # Get menu items
+    cursor.execute('SELECT * FROM menu_items WHERE restaurant_id = ?', (restaurant_id,))
+    menu_items_rows = cursor.fetchall()
+    
+    # Build restaurant object
+    restaurant = {
+        'restaurant_id': restaurant_row['restaurant_id'],
+        'name': restaurant_row['name'],
+        'borough': restaurant_row['borough'],
+        'cuisine': restaurant_row['cuisine'],
+        'address': {
+            'street': restaurant_row['street'],
+            'zipcode': restaurant_row['zipcode']
+        },
+        'menu': []
+    }
+    
+    # Add menu items
+    for item_row in menu_items_rows:
+        menu_item = {
+            '_id': item_row['item_id'],
+            'name': item_row['name'],
+            'section': item_row['section'],
+            'description': item_row['description'],
+            'price': item_row['price'],
+            'image': item_row['image']
+        }
+        restaurant['menu'].append(menu_item)
+    
+    conn.close()
+    return restaurant
 
 # --- User Management Endpoints ---
 
@@ -93,7 +138,75 @@ def get_user_orders(user_id):
 @app.route('/restaurants', methods=['GET'])
 def get_restaurants():
     """Returns a list of all restaurants."""
-    return jsonify(restaurants)
+    # Get pagination parameters
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)  # Default 50 restaurants per page
+    
+    # Connect to database
+    conn = sqlite3.connect('uber_eats.db')
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    # Get total count
+    cursor.execute('SELECT COUNT(*) as count FROM restaurants')
+    total_count = cursor.fetchone()['count']
+    
+    # Calculate offset
+    offset = (page - 1) * per_page
+    
+    # Get restaurants with pagination
+    cursor.execute('SELECT * FROM restaurants LIMIT ? OFFSET ?', (per_page, offset))
+    restaurant_rows = cursor.fetchall()
+    
+    # Build response
+    result = []
+    for row in restaurant_rows:
+        restaurant_id = row['restaurant_id']
+        
+        # Get menu items (limited to 10 for performance)
+        cursor.execute('SELECT * FROM menu_items WHERE restaurant_id = ? LIMIT 10', (restaurant_id,))
+        menu_items_rows = cursor.fetchall()
+        
+        # Build restaurant object
+        restaurant = {
+            'restaurant_id': restaurant_id,
+            'name': row['name'],
+            'borough': row['borough'],
+            'cuisine': row['cuisine'],
+            'address': {
+                'street': row['street'],
+                'zipcode': row['zipcode']
+            },
+            'menu': []
+        }
+        
+        # Add menu items
+        for item_row in menu_items_rows:
+            menu_item = {
+                '_id': item_row['item_id'],
+                'name': item_row['name'],
+                'section': item_row['section'],
+                'description': item_row['description'],
+                'price': item_row['price'],
+                'image': item_row['image']
+            }
+            restaurant['menu'].append(menu_item)
+        
+        result.append(restaurant)
+    
+    # Add pagination metadata
+    response = {
+        'restaurants': result,
+        'pagination': {
+            'total': total_count,
+            'page': page,
+            'per_page': per_page,
+            'pages': (total_count + per_page - 1) // per_page  # Ceiling division
+        }
+    }
+    
+    conn.close()
+    return jsonify(response)
 
 @app.route('/restaurants/<restaurant_id>', methods=['GET'])
 def get_restaurant(restaurant_id):
@@ -106,10 +219,36 @@ def get_restaurant(restaurant_id):
 @app.route('/restaurants/<restaurant_id>/menu', methods=['GET'])
 def get_menu(restaurant_id):
     """Returns the menu for a specific restaurant."""
-    restaurant = get_restaurant_by_id(restaurant_id)
-    if restaurant:
-        return jsonify(restaurant.get('menu', []))
-    return jsonify({'error': 'Restaurant not found'}), 404
+    # Connect to database
+    conn = sqlite3.connect('uber_eats.db')
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    # Check if restaurant exists
+    cursor.execute('SELECT restaurant_id FROM restaurants WHERE restaurant_id = ?', (restaurant_id,))
+    if not cursor.fetchone():
+        conn.close()
+        return jsonify({'error': 'Restaurant not found'}), 404
+    
+    # Get menu items
+    cursor.execute('SELECT * FROM menu_items WHERE restaurant_id = ?', (restaurant_id,))
+    menu_items_rows = cursor.fetchall()
+    
+    # Format menu items
+    menu = []
+    for row in menu_items_rows:
+        menu_item = {
+            '_id': row['item_id'],
+            'name': row['name'],
+            'section': row['section'],
+            'description': row['description'],
+            'price': row['price'],
+            'image': row['image']
+        }
+        menu.append(menu_item)
+    
+    conn.close()
+    return jsonify(menu)
 
 # --- Order Management Endpoints ---
 
@@ -199,20 +338,34 @@ def get_recommendations(user_id):
             available_restaurants_info.append(f"- {r['name']} (offers: {', '.join(list(all_sections)[:3])})")
 
     prompt = (
-        "Based on the user's order history, suggest 3 new restaurants to try from the 'Available Restaurants' list. "
-        "Provide a brief, one-sentence reason for each suggestion based on the menu sections. "
-        "Do not suggest any restaurants the user has already ordered from.\n\n"
-        "## User Order History:\n"
-        f"{'\n'.join(order_history_summary)}\n\n"
-        "## Available Restaurants:\n"
-        f"{'\n'.join(available_restaurants_info)}\n\n"
-        "Provide only the 3 recommendations in a simple, unnumbered list."
+        "# Restaurant Recommendation Assistant\n"
+        "You are an expert restaurant recommendation assistant with deep knowledge of culinary preferences and food pairing.\n"
+        "The current date is July 8, 2025.\n"
+        
+        "## Your Task\n"
+        "Based on the user's order history, suggest exactly 3 new restaurants for them to try.\n"
+        "Each recommendation should be thoughtfully selected based on the user's demonstrated preferences.\n"
+        "For each recommendation, provide a brief, specific reason why this restaurant would appeal to this particular user.\n"
+        "Focus on menu sections, cuisine types, and flavor profiles that align with their past orders.\n"
+        "Do not suggest any restaurants the user has already ordered from.\n"
+        
+        "## User Order History\n"
+        f"{'\n'.join(order_history_summary)}\n"
+        
+        "## Available Restaurants\n"
+        f"{'\n'.join(available_restaurants_info)}\n"
+        
+        "## Response Format\n"
+        "Provide exactly 3 recommendations in a simple, unnumbered list.\n"
+        "Each recommendation should include the restaurant name and a single concise sentence explaining why it matches this user's preferences.\n"
+        "Be decisive and confident in your selections - these are the perfect matches for this user.\n"
+        "Do not include any introductory or concluding text - just the three recommendations."
     )
 
     try:
         chat_completion = groq_client.chat.completions.create(
             messages=[
-                {"role": "system", "content": "You are a helpful restaurant recommendation assistant."},
+                {"role": "system", "content": "You are a sophisticated restaurant recommendation assistant with expertise in culinary preferences, food pairing, and personalization. Your recommendations are thoughtful, specific, and tailored to each user's unique taste profile. You excel at identifying patterns in ordering behavior and suggesting new dining experiences that will delight users while expanding their culinary horizons."},
                 {"role": "user", "content": prompt}
             ],
             model="meta-llama/llama-4-scout-17b-16e-instruct",
@@ -243,20 +396,36 @@ def generate_options():
     
     # Prepare prompt for LLM
     prompt = f"""
-    Based on the user input: "{input_text}", suggest 3 food options.
-    For each food option, provide:
-    - A name for the food item
-    - A URL to an image of the food (you can make up a realistic URL)
-    - The cuisine type
+    # Food Recommendation Assistant
+    You are an expert culinary advisor with deep knowledge of global cuisines, flavor profiles, and food preferences.
+    The current date is July 8, 2025.
     
-    Return the results in JSON format with no additional text.
+    ## Your Task
+    Based on the user input: "{input_text}", suggest exactly 3 food options that would perfectly satisfy their request.
+    Each suggestion should be thoughtfully selected based on the user's expressed preferences.
+    
+    ## User Information
+    Email: {user_email}
+    Request: "{input_text}"
+    
+    ## Response Requirements
+    For each food option, you must provide:
+    - A descriptive and appetizing name for the food item
+    - A realistic URL to an image of the food (create a plausible URL)
+    - The specific cuisine type the dish belongs to
+    
+    ## Response Format
+    Return ONLY valid JSON with this exact structure:
+    {{"options": [{{"name": "Food Name", "image_url": "https://example.com/image.jpg", "cuisine": "Cuisine Type"}}, ...]}}
+    
+    Do not include any explanatory text outside the JSON structure.
+    Be creative, specific, and ensure your suggestions truly match what the user is looking for.
     """
     
     try:
         chat_completion = groq_client.chat.completions.create(
             messages=[
-                {"role": "system", "content": "You are a helpful food recommendation assistant. "
-                 "Return only valid JSON with no additional text or explanations."},
+                {"role": "system", "content": "You are a sophisticated food recommendation assistant with expertise in global cuisines, culinary trends, and personalization. You excel at understanding user preferences from minimal context and providing perfectly tailored food suggestions. You always respond with properly structured JSON data exactly as requested, with no additional text or explanations. Your food suggestions are creative, specific, and precisely matched to the user's needs."},
                 {"role": "user", "content": prompt}
             ],
             model="meta-llama/llama-4-scout-17b-16e-instruct",
@@ -379,5 +548,135 @@ def generate_options():
     except Exception as e:
         return jsonify({"error": f"Failed to generate options: {str(e)}"}), 500
 
+@app.route('/users/<user_id>/notes', methods=['GET'])
+def get_user_notes(user_id):
+    """Get LLM-generated notes and insights about a user."""
+    # Check if user exists
+    user = db.get_user(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    # Check if we should generate a new note
+    generate_new = request.args.get('generate', 'false').lower() == 'true'
+    
+    # Get existing notes
+    existing_notes = db.get_user_notes(user_id)
+    
+    # Generate a new note if requested
+    if generate_new and groq_client:
+        # Get user's order history
+        user_orders = db.get_user_orders(user_id)
+        
+        if not user_orders:
+            return jsonify({
+                'notes': existing_notes,
+                'message': 'Not enough order history to generate new insights.'
+            })
+        
+        # Prepare data for LLM
+        order_history = []
+        restaurant_counts = {}
+        cuisine_counts = {}
+        item_counts = {}
+        
+        for order in user_orders:
+            restaurant = get_restaurant_by_id(order['restaurant_id'])
+            if restaurant:
+                # Count restaurant visits
+                restaurant_name = restaurant['name']
+                restaurant_counts[restaurant_name] = restaurant_counts.get(restaurant_name, 0) + 1
+                
+                # Get ordered items
+                ordered_items = []
+                for item_id in order['items']:
+                    for menu_item in restaurant.get('menu', []):
+                        if menu_item.get('_id') == item_id:
+                            ordered_items.append(menu_item)
+                            
+                            # Count cuisines
+                            if 'section' in menu_item:
+                                cuisine_counts[menu_item['section']] = cuisine_counts.get(menu_item['section'], 0) + 1
+                            
+                            # Count items
+                            item_name = menu_item.get('name', '')
+                            item_counts[item_name] = item_counts.get(item_name, 0) + 1
+                
+                # Add to order history
+                order_history.append({
+                    'restaurant': restaurant_name,
+                    'items': [item.get('name', '') for item in ordered_items]
+                })
+        
+        # Create prompt for LLM
+        prompt = f"""
+        # User Insight Generator
+        You are an expert in analyzing user food preferences and generating insightful notes about their habits and tastes.
+        The current date is July 8, 2025.
+        
+        ## Your Task
+        Analyze this user's order history and generate 3 distinct insights about their food preferences and habits.
+        These insights should be thoughtful, specific, and reveal patterns that might not be immediately obvious.
+        
+        ## User Information
+        User ID: {user_id}
+        Total Orders: {len(user_orders)}
+        
+        ## Order History
+        {json.dumps(order_history, indent=2)}
+        
+        ## Restaurant Visit Frequency
+        {json.dumps(restaurant_counts, indent=2)}
+        
+        ## Cuisine Type Frequency
+        {json.dumps(cuisine_counts, indent=2)}
+        
+        ## Food Item Frequency
+        {json.dumps(item_counts, indent=2)}
+        
+        ## Response Format
+        Generate exactly 3 distinct insights about this user's preferences, each 1-2 sentences long.
+        Each insight should reveal something meaningful about their tastes, habits, or patterns.
+        Format each insight as a separate paragraph.
+        Do not include any introductory or concluding text.
+        """
+        
+        try:
+            # Call LLM to generate insights
+            chat_completion = groq_client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": "You are an expert in analyzing food preferences and generating insightful notes about user habits and tastes. Your insights are specific, thoughtful, and reveal meaningful patterns."},
+                    {"role": "user", "content": prompt}
+                ],
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+            )
+            
+            insights = chat_completion.choices[0].message.content
+            
+            # Split insights into separate notes
+            insight_paragraphs = [p.strip() for p in insights.split('\n\n') if p.strip()]
+            
+            # Store each insight as a separate note
+            for i, insight in enumerate(insight_paragraphs[:3]):  # Limit to 3 insights
+                db.add_user_note(user_id, insight, f'food_insight_{i+1}')
+            
+            # Get updated notes
+            existing_notes = db.get_user_notes(user_id)
+            
+            return jsonify({
+                'notes': existing_notes,
+                'message': 'Generated new insights based on order history.'
+            })
+            
+        except Exception as e:
+            return jsonify({
+                'notes': existing_notes,
+                'error': f'Failed to generate new insights: {str(e)}'
+            })
+    
+    # Return existing notes
+    return jsonify({
+        'notes': existing_notes
+    })
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5004, debug=True)
+    app.run(host='0.0.0.0', port=5005, debug=True)

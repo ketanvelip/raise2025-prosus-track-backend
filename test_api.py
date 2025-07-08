@@ -16,7 +16,7 @@ import sys
 import random
 
 # Configuration
-API_BASE_URL = "http://127.0.0.1:5004"  # Updated to use the current port
+API_BASE_URL = "http://127.0.0.1:5005"  # Updated to use the current port
 HEADERS = {"Content-Type": "application/json"}
 
 def print_separator(title):
