@@ -812,7 +812,11 @@ class LLMToolsIntegration:
         system_prompt = """
         You are a restaurant recommendation expert providing personalized food suggestions.
         Use the available tools to query the database for restaurants and menu items.
-        Make your recommendations specific, mentioning actual restaurant names and menu items.
+        IMPORTANT: You must ONLY recommend actual restaurants that exist in the database.
+        DO NOT invent or create fictional restaurant names - use ONLY the exact restaurant
+        names returned by the database queries.
+        Make your recommendations specific, mentioning actual restaurant names and menu items
+        that were returned in the database query results.
         """
         
         user_prompt = f"""
@@ -887,7 +891,13 @@ class LLMToolsIntegration:
                   "follow_up_question": "A question to refine recommendations further"
                 }}
                 
-                Include 2-3 specific recommendations in the recommendations array.
+                EXTREMELY IMPORTANT:
+                1. You must ONLY use restaurant names that actually exist in the database results
+                2. The "restaurant_name" field must contain the EXACT name of a restaurant from your database query results
+                3. DO NOT invent or create fictional restaurant names - use ONLY names that were returned by your tool calls
+                4. If you're not sure if a restaurant exists in the database, call the search_restaurants tool to verify
+                5. Include 2-3 specific recommendations in the recommendations array
+                
                 Make sure your response is valid JSON.
                 """
                 
