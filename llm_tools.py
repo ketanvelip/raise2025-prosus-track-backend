@@ -333,6 +333,198 @@ class DatabaseTools:
             return {"error": str(e)}
         finally:
             self.close(conn)
+    
+    def get_restaurant_ingredients(self, restaurant_id: str) -> List[Dict[str, Any]]:
+        """
+        Get ingredients available at a specific restaurant.
+        
+        Args:
+            restaurant_id: The ID of the restaurant
+            
+        Returns:
+            List of ingredient dictionaries
+        """
+        conn, cursor = self.connect()
+        try:
+            query = """
+            SELECT i.ingredient_id, i.name, i.category
+            FROM ingredients i
+            JOIN restaurant_ingredients ri ON i.ingredient_id = ri.ingredient_id
+            WHERE ri.restaurant_id = ?
+            ORDER BY i.category, i.name
+            """
+            
+            cursor.execute(query, (restaurant_id,))
+            
+            # Convert rows to dictionaries
+            columns = [col[0] for col in cursor.description]
+            results = []
+            for row in cursor.fetchall():
+                results.append(dict(zip(columns, row)))
+            
+            return results
+        except Exception as e:
+            return {"error": str(e)}
+        finally:
+            self.close(conn)
+    
+    def search_by_ingredients(self, ingredients: List[str], match_all: bool = False, limit: int = 5) -> List[Dict[str, Any]]:
+        """
+        Search for restaurants that have specific ingredients available.
+        
+        Args:
+            ingredients: List of ingredient names to search for
+            match_all: If True, restaurants must have ALL ingredients; if False, ANY ingredient
+            limit: Maximum number of results to return (default: 5)
+            
+        Returns:
+            List of restaurant dictionaries with ingredient match counts
+        """
+        if not ingredients:
+            return []
+        
+        conn, cursor = self.connect()
+        try:
+            # Convert ingredient names to placeholders for the query
+            placeholders = ', '.join(['?'] * len(ingredients))
+            
+            # Different query based on match_all or match_any
+            if match_all:
+                # Must match all ingredients (count must equal the number of ingredients)
+                query = f"""
+                SELECT r.restaurant_id, r.name, r.cuisine, r.borough, COUNT(DISTINCT i.ingredient_id) as match_count
+                FROM restaurants r
+                JOIN restaurant_ingredients ri ON r.restaurant_id = ri.restaurant_id
+                JOIN ingredients i ON ri.ingredient_id = i.ingredient_id
+                WHERE i.name IN ({placeholders})
+                GROUP BY r.restaurant_id
+                HAVING match_count = ?
+                ORDER BY match_count DESC
+                LIMIT ?
+                """
+                params = ingredients + [len(ingredients), min(limit, 20)]
+            else:
+                # Match any of the ingredients
+                query = f"""
+                SELECT r.restaurant_id, r.name, r.cuisine, r.borough, COUNT(DISTINCT i.ingredient_id) as match_count
+                FROM restaurants r
+                JOIN restaurant_ingredients ri ON r.restaurant_id = ri.restaurant_id
+                JOIN ingredients i ON ri.ingredient_id = i.ingredient_id
+                WHERE i.name IN ({placeholders})
+                GROUP BY r.restaurant_id
+                ORDER BY match_count DESC
+                LIMIT ?
+                """
+                params = ingredients + [min(limit, 20)]
+            
+            cursor.execute(query, params)
+            
+            # Convert rows to dictionaries
+            columns = [col[0] for col in cursor.description]
+            results = []
+            for row in cursor.fetchall():
+                results.append(dict(zip(columns, row)))
+            
+            return results
+        except Exception as e:
+            return {"error": str(e)}
+        finally:
+            self.close(conn)
+    
+    def get_popular_ingredients(self, category: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Get the most popular ingredients based on restaurant usage.
+        
+        Args:
+            category: Optional filter for ingredient category
+            limit: Maximum number of ingredients to return (default: 10)
+            
+        Returns:
+            List of ingredient dictionaries with counts
+        """
+        conn, cursor = self.connect()
+        try:
+            query = """
+            SELECT i.ingredient_id, i.name, i.category, COUNT(ri.restaurant_id) as restaurant_count
+            FROM ingredients i
+            JOIN restaurant_ingredients ri ON i.ingredient_id = ri.ingredient_id
+            """
+            
+            params = []
+            if category:
+                query += " WHERE i.category = ? "
+                params.append(category)
+                
+            query += """
+            GROUP BY i.ingredient_id
+            ORDER BY restaurant_count DESC
+            LIMIT ?
+            """
+            
+            params.append(min(limit, 30))  # Cap at 30 for safety
+            
+            cursor.execute(query, params)
+            
+            # Convert rows to dictionaries
+            columns = [col[0] for col in cursor.description]
+            results = []
+            for row in cursor.fetchall():
+                results.append(dict(zip(columns, row)))
+            
+            return results
+        except Exception as e:
+            return {"error": str(e)}
+        finally:
+            self.close(conn)
+            
+    def get_ingredients_by_category(self, restaurant_id: str) -> Dict[str, List[str]]:
+        """
+        Get ingredients available at a specific restaurant, organized by category.
+        This is useful for custom food recommendations.
+        
+        Args:
+            restaurant_id: The ID of the restaurant
+            
+        Returns:
+            Dictionary with categories as keys and lists of ingredient names as values
+        """
+        conn, cursor = self.connect()
+        try:
+            query = """
+            SELECT i.name, i.category
+            FROM ingredients i
+            JOIN restaurant_ingredients ri ON i.ingredient_id = ri.ingredient_id
+            WHERE ri.restaurant_id = ?
+            ORDER BY i.category, i.name
+            """
+            
+            cursor.execute(query, (restaurant_id,))
+            
+            # Organize ingredients by category
+            categorized = {
+                "protein": [],
+                "vegetable": [],
+                "grain": [],
+                "dairy": [],
+                "spice_herb": [],
+                "fruit": [],
+                "other": []
+            }
+            
+            for row in cursor.fetchall():
+                name, category = row
+                if category in categorized:
+                    categorized[category].append(name)
+                else:
+                    categorized["other"].append(name)
+            
+            # Remove empty categories
+            return {k: v for k, v in categorized.items() if v}
+            
+        except Exception as e:
+            return {"error": str(e)}
+        finally:
+            self.close(conn)
 
 
 class LLMToolsIntegration:
@@ -343,7 +535,7 @@ class LLMToolsIntegration:
     def __init__(self, db_path: str = 'uber_eats.db'):
         """Initialize the LLM tools integration."""
         self.db_tools = DatabaseTools(db_path)
-        self.model = "meta-llama/llama-4-scout-17b-16e-instruct"
+        self.model = "meta-llama/llama-4-maverick-17b-128e-instruct"
         
         # Define the tools (functions) that the LLM can call
         self.tools = [
@@ -369,6 +561,69 @@ class LLMToolsIntegration:
                             }
                         },
                         "required": ["search_term"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_by_ingredients",
+                    "description": "Search for restaurants that have specific ingredients available",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "ingredients": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "List of ingredient names to search for"
+                            },
+                            "match_all": {
+                                "type": "boolean",
+                                "description": "If true, restaurants must have ALL ingredients; if false, ANY ingredient (default: false)"
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Maximum number of results to return (default: 5)"
+                            }
+                        },
+                        "required": ["ingredients"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_restaurant_ingredients",
+                    "description": "Get ingredients available at a specific restaurant",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "restaurant_id": {
+                                "type": "string",
+                                "description": "The ID of the restaurant"
+                            }
+                        },
+                        "required": ["restaurant_id"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_popular_ingredients",
+                    "description": "Get the most popular ingredients based on restaurant usage",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "category": {
+                                "type": "string",
+                                "description": "Optional filter for ingredient category (protein, vegetable, grain, dairy, spice_herb, fruit, other)"
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Maximum number of ingredients to return (default: 10)"
+                            }
+                        }
                     }
                 }
             },
@@ -531,6 +786,13 @@ class LLMToolsIntegration:
             return self.db_tools.get_user_favorite_cuisines(**function_args)
         elif function_name == "get_similar_restaurants":
             return self.db_tools.get_similar_restaurants(**function_args)
+        # New ingredient-related functions
+        elif function_name == "search_by_ingredients":
+            return self.db_tools.search_by_ingredients(**function_args)
+        elif function_name == "get_restaurant_ingredients":
+            return self.db_tools.get_restaurant_ingredients(**function_args)
+        elif function_name == "get_popular_ingredients":
+            return self.db_tools.get_popular_ingredients(**function_args)
         else:
             return {"error": f"Unknown function: {function_name}"}
     
@@ -577,7 +839,8 @@ class LLMToolsIntegration:
                 model=self.model,
                 messages=messages,
                 tools=self.tools,
-                tool_choice="auto"
+                tool_choice="auto",
+                temperature=0.2
             )
             
             assistant_message = response.choices[0].message
@@ -667,6 +930,149 @@ class LLMToolsIntegration:
                 "follow_up_question": "Would you like to try a different type of cuisine?"
             }
 
+
+    def generate_custom_food(self, restaurant_id: str, preferences: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Generate food recommendations including both on-menu items and custom off-menu dishes
+        that can be prepared with the restaurant's available ingredients.
+        
+        Args:
+            restaurant_id: The ID of the restaurant
+            preferences: Optional dictionary of user preferences (dietary restrictions, etc.)
+            
+        Returns:
+            Dictionary with on-menu and off-menu food recommendations
+        """
+        # Get restaurant details
+        conn, cursor = self.db_tools.connect()
+        try:
+            query = "SELECT restaurant_id, name, cuisine FROM restaurants WHERE restaurant_id = ?"
+            cursor.execute(query, (restaurant_id,))
+            result = cursor.fetchone()
+            
+            if result:
+                restaurant = {
+                    "restaurant_id": result[0],
+                    "name": result[1],
+                    "cuisine": result[2]
+                }
+            else:
+                return {
+                    "error": "Restaurant not found",
+                    "menu_items": [],
+                    "custom_foods": []
+                }
+        except Exception as e:
+            return {
+                "error": f"Failed to get restaurant details: {str(e)}",
+                "menu_items": [],
+                "custom_foods": []
+            }
+        finally:
+            self.db_tools.close(conn)
+            
+        restaurant_name = restaurant.get("name", "Unknown Restaurant")
+        cuisine = restaurant.get("cuisine", "Unknown Cuisine")
+        
+        # Get menu items for the restaurant
+        menu_items = self.db_tools.get_restaurant_menu(restaurant_id, limit=20)
+        if isinstance(menu_items, dict) and "error" in menu_items:
+            menu_items = []
+        
+        # Get ingredients by category
+        ingredients_by_category = self.db_tools.get_ingredients_by_category(restaurant_id)
+        if isinstance(ingredients_by_category, dict) and "error" in ingredients_by_category:
+            return {
+                "error": "Failed to get ingredients",
+                "menu_items": [],
+                "custom_foods": []
+            }
+        
+        # Create the prompt
+        system_prompt = """
+        You are a culinary expert specializing in food recommendations and creative dish ideas.
+        Your task is to provide both on-menu recommendations and suggest unique off-menu dishes 
+        that can be prepared with the restaurant's available ingredients.
+        """
+        
+        user_prompt = f"""
+        I need food recommendations for a restaurant called "{restaurant_name}" 
+        which specializes in {cuisine} cuisine.
+        
+        The restaurant has the following menu items:
+        {json.dumps([{"name": item.get("name"), "description": item.get("description"), "section": item.get("section"), "price": item.get("price")} for item in menu_items], indent=2)}
+        
+        The restaurant also has the following ingredients available, organized by category:
+        {json.dumps(ingredients_by_category, indent=2)}
+        
+        User preferences: {json.dumps(preferences) if preferences else 'No specific preferences'}
+        
+        Please provide:
+        
+        1. THREE (3) recommended items from the existing menu. For each item, include:
+           - The exact name from the menu
+           - A brief reason why you're recommending it
+           - Any suggested modifications or pairings
+        
+        2. TWO (2) creative off-menu dishes that could be prepared with the available ingredients. For each dish, include:
+           - A creative name
+           - A brief description
+           - Main ingredients required
+           - Simple preparation instructions
+           - Estimated cooking time
+        
+        Format your response as a JSON object with 'menu_items' and 'custom_foods' arrays.
+        """
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+        
+        try:
+            response = groq_client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                response_format={"type": "json_object"},
+                temperature=0.7  # Higher temperature for more creativity
+            )
+            
+            # Parse the JSON response
+            try:
+                recommendations_json = response.choices[0].message.content.strip()
+                recommendations_data = json.loads(recommendations_json)
+                
+                # Add restaurant information
+                result = {
+                    "restaurant_id": restaurant_id,
+                    "restaurant_name": restaurant_name,
+                    "cuisine": cuisine,
+                    "menu_items": recommendations_data.get("menu_items", []),
+                    "custom_foods": recommendations_data.get("custom_foods", [])
+                }
+                
+                return result
+            except json.JSONDecodeError as e:
+                print(f"Error parsing JSON response: {str(e)}")
+                # Fallback response
+                return {
+                    "restaurant_id": restaurant_id,
+                    "restaurant_name": restaurant_name,
+                    "cuisine": cuisine,
+                    "menu_items": [],
+                    "custom_foods": [],
+                    "error": "Failed to parse food recommendations"
+                }
+        except Exception as e:
+            print(f"Error generating food recommendations: {str(e)}")
+            return {
+                "restaurant_id": restaurant_id,
+                "restaurant_name": restaurant_name,
+                "cuisine": cuisine,
+                "menu_items": [],
+                "custom_foods": [],
+                "error": f"Failed to generate food recommendations: {str(e)}"
+            }
 
 # Example usage
 if __name__ == "__main__":

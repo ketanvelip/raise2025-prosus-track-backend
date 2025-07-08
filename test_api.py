@@ -200,6 +200,36 @@ def test_get_recommendations(user_id):
         print(f"Response: {response.text}")
         return None
 
+
+def test_get_custom_foods(restaurant_id, preferences=None):
+    """Test getting custom food recommendations for a specific restaurant."""
+    print_separator("GETTING CUSTOM FOOD RECOMMENDATIONS")
+    
+    print(f"Getting custom food recommendations for restaurant_id: {restaurant_id}")
+    print("This may take a few seconds as it calls the LLM API...")
+    
+    # Prepare request data
+    data = {}
+    if preferences:
+        data["preferences"] = preferences
+    
+    # Call the custom foods endpoint
+    response = requests.post(
+        f"{API_BASE_URL}/restaurants/{restaurant_id}/custom-foods",
+        json=data,
+        headers={"Content-Type": "application/json"}
+    )
+    
+    if response.status_code == 200:
+        custom_foods = response.json()
+        print("Custom food recommendations received successfully:")
+        print(json.dumps(custom_foods, indent=2))
+        return custom_foods
+    else:
+        print(f"Failed to get custom food recommendations. Status code: {response.status_code}")
+        print(f"Response: {response.text}")
+        return None
+
 def test_get_order(order_id):
     """Test retrieving a specific order by ID."""
     print_separator("RETRIEVING ORDER DETAILS")
@@ -241,8 +271,14 @@ def run_end_to_end_test():
         test_get_user_orders(user_id)
         
         # Test getting recommendations
-        # Note: this might fail if GROQ_API_KEY is not set
         test_get_recommendations(user_id)
+        
+        # Test getting custom food recommendations
+        preferences = {
+            "dietary_restrictions": ["vegetarian"],
+            "spice_level": "medium"
+        }
+        test_get_custom_foods(restaurant_id, preferences)
         
         print("\n🎉 End-to-end test completed successfully! 🎉\n")
     

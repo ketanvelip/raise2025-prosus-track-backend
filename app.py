@@ -9,11 +9,15 @@ from groq import Groq
 from dotenv import load_dotenv
 from db_manager import db
 from llm_tools import LLMToolsIntegration
+from user_preferences_api import register_user_preferences_endpoints
 
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app) # This will allow all origins
+
+# Register user preferences endpoints
+register_user_preferences_endpoints(app)
 
 # --- Initialization ---
 
@@ -133,6 +137,66 @@ def get_user_orders(user_id):
     user_orders_ids = users[user_id].get('orders', [])
     user_orders = [orders[order_id] for order_id in user_orders_ids if order_id in orders]
     return jsonify(user_orders)
+
+# --- Ingredient Endpoints ---
+
+@app.route('/ingredients/popular', methods=['GET'])
+def get_popular_ingredients():
+    """Returns the most popular ingredients across all restaurants."""
+    category = request.args.get('category')
+    limit = request.args.get('limit', 10, type=int)
+    
+    # Initialize the LLM tools integration to use its database tools
+    llm_tools = LLMToolsIntegration()
+    
+    # Get popular ingredients
+    try:
+        ingredients = llm_tools.db_tools.get_popular_ingredients(category=category, limit=limit)
+        return jsonify({'ingredients': ingredients})
+    except Exception as e:
+        print(f"Error getting popular ingredients: {str(e)}")
+        return jsonify({'error': f'Failed to get popular ingredients: {str(e)}'}), 500
+
+@app.route('/restaurants/<restaurant_id>/ingredients', methods=['GET'])
+def get_restaurant_ingredients(restaurant_id):
+    """Returns all ingredients available at a specific restaurant."""
+    # Initialize the LLM tools integration to use its database tools
+    llm_tools = LLMToolsIntegration()
+    
+    # Get restaurant ingredients
+    try:
+        ingredients = llm_tools.db_tools.get_restaurant_ingredients(restaurant_id)
+        return jsonify({'ingredients': ingredients})
+    except Exception as e:
+        print(f"Error getting restaurant ingredients: {str(e)}")
+        return jsonify({'error': f'Failed to get restaurant ingredients: {str(e)}'}), 500
+
+@app.route('/restaurants/search/ingredients', methods=['POST'])
+def search_restaurants_by_ingredients():
+    """Search for restaurants that have specific ingredients available."""
+    data = request.get_json()
+    
+    if not data or 'ingredients' not in data:
+        return jsonify({'error': 'Ingredients list is required'}), 400
+    
+    ingredients = data.get('ingredients', [])
+    match_all = data.get('match_all', False)
+    limit = data.get('limit', 5)
+    
+    # Initialize the LLM tools integration to use its database tools
+    llm_tools = LLMToolsIntegration()
+    
+    # Search restaurants by ingredients
+    try:
+        restaurants = llm_tools.db_tools.search_by_ingredients(
+            ingredients=ingredients, 
+            match_all=match_all, 
+            limit=limit
+        )
+        return jsonify({'restaurants': restaurants})
+    except Exception as e:
+        print(f"Error searching restaurants by ingredients: {str(e)}")
+        return jsonify({'error': f'Failed to search restaurants: {str(e)}'}), 500
 
 # --- Restaurant and Menu Endpoints ---
 
@@ -298,7 +362,28 @@ def get_order(order_id):
         return jsonify(order)
     return jsonify({'error': 'Order not found'}), 404
 
-# --- Recommendation Endpoints ---
+# --- LLM-Powered Endpoints ---
+
+@app.route('/restaurants/<restaurant_id>/custom-foods', methods=['POST'])
+def get_custom_foods(restaurant_id):
+    """Generate custom food recommendations based on ingredients a restaurant has on hand."""
+    data = request.get_json() or {}
+    preferences = data.get('preferences', {})
+    
+    # Initialize the LLM tools integration
+    llm_tools = LLMToolsIntegration()
+    
+    # Generate custom food recommendations
+    try:
+        custom_foods = llm_tools.generate_custom_food(restaurant_id, preferences)
+        return jsonify(custom_foods)
+    except Exception as e:
+        print(f"Error generating custom food recommendations: {str(e)}")
+        return jsonify({
+            'restaurant_id': restaurant_id,
+            'error': f'Failed to generate custom food recommendations: {str(e)}',
+            'custom_foods': []
+        }), 500
 
 @app.route('/recommendations', methods=['GET'])
 def get_recommendations():

@@ -22,6 +22,79 @@ Currently, the API does not require authentication. This should be implemented b
 
 ## API Endpoints
 
+### Ingredient Management
+
+#### Get Popular Ingredients
+
+Returns the most popular ingredients across all restaurants.
+
+- **URL**: `/ingredients/popular`
+- **Method**: `GET`
+- **Query Parameters**:
+  - `category` (optional): Filter by ingredient category (protein, vegetable, grain, dairy, spice_herb, fruit, other)
+  - `limit` (optional): Maximum number of ingredients to return (default: 10)
+- **Response**: `200 OK`
+  ```json
+  {
+    "ingredients": [
+      {
+        "ingredient_id": "string",
+        "name": "string",
+        "category": "string",
+        "restaurant_count": "integer"
+      }
+    ]
+  }
+  ```
+
+#### Get Restaurant Ingredients
+
+Returns all ingredients available at a specific restaurant.
+
+- **URL**: `/restaurants/{restaurant_id}/ingredients`
+- **Method**: `GET`
+- **Response**: `200 OK`
+  ```json
+  {
+    "ingredients": [
+      {
+        "ingredient_id": "string",
+        "name": "string",
+        "category": "string"
+      }
+    ]
+  }
+  ```
+
+#### Search Restaurants by Ingredients
+
+Search for restaurants that have specific ingredients available.
+
+- **URL**: `/restaurants/search/ingredients`
+- **Method**: `POST`
+- **Request Body**:
+  ```json
+  {
+    "ingredients": ["string"],
+    "match_all": "boolean",
+    "limit": "integer"
+  }
+  ```
+- **Response**: `200 OK`
+  ```json
+  {
+    "restaurants": [
+      {
+        "restaurant_id": "string",
+        "name": "string",
+        "cuisine": "string",
+        "borough": "string",
+        "match_count": "integer"
+      }
+    ]
+  }
+  ```
+
 ### User Management
 
 #### Create User
@@ -67,6 +140,52 @@ Retrieves user details by ID.
         "status": "string"
       }
     ]
+  }
+  ```
+
+#### Get User Preferences
+
+Retrieves a user's dietary and food preferences.
+
+- **URL**: `/users/{user_id}/preferences`
+- **Method**: `GET`
+- **Response**: `200 OK`
+  ```json
+  {
+    "dietary_restrictions": ["vegetarian", "gluten-free"],
+    "spice_level": "medium",
+    "preferred_protein": "chicken",
+    "avoid": ["mushrooms", "olives"],
+    "other_preferences": {}
+  }
+  ```
+
+#### Update User Preferences
+
+Updates a user's dietary and food preferences.
+
+- **URL**: `/users/{user_id}/preferences`
+- **Method**: `PUT`
+- **Request Body**:
+  ```json
+  {
+    "dietary_restrictions": ["vegetarian", "gluten-free"],
+    "spice_level": "medium",
+    "preferred_protein": "chicken",
+    "avoid": ["mushrooms", "olives"],
+    "other_preferences": {}
+  }
+  ```
+  Note: All fields are optional. You can update just the fields you want to change.
+  
+- **Response**: `200 OK`
+  ```json
+  {
+    "dietary_restrictions": ["vegetarian", "gluten-free"],
+    "spice_level": "medium",
+    "preferred_protein": "chicken",
+    "avoid": ["mushrooms", "olives"],
+    "other_preferences": {}
   }
   ```
 
@@ -249,6 +368,50 @@ Retrieves all orders for a specific user.
   ```
 
 ### LLM-Powered Features
+
+#### Get Food Recommendations
+
+Generates food recommendations including both on-menu items and custom off-menu dishes that can be prepared with the restaurant's available ingredients.
+
+- **URL**: `/restaurants/{restaurant_id}/custom-foods`
+- **Method**: `POST`
+- **Request Body**:
+  ```json
+  {
+    "preferences": {
+      "dietary_restrictions": ["vegetarian", "gluten-free"],
+      "spice_level": "medium",
+      "preferred_protein": "chicken",
+      "avoid": ["mushrooms", "olives"]
+    }
+  }
+  ```
+  Note: All preference fields are optional.
+
+- **Response**: `200 OK`
+  ```json
+  {
+    "restaurant_id": "string",
+    "restaurant_name": "string",
+    "cuisine": "string",
+    "menu_items": [
+      {
+        "name": "Exact menu item name",
+        "reason": "Brief reason for recommendation",
+        "modifications": "Suggested modifications or pairings"
+      }
+    ],
+    "custom_foods": [
+      {
+        "name": "Creative dish name",
+        "description": "Brief description of the dish",
+        "main_ingredients": ["ingredient1", "ingredient2", "ingredient3"],
+        "instructions": "Simple preparation instructions",
+        "cooking_time": 20
+      }
+    ]
+  }
+  ```
 
 #### Get Recommendations
 
