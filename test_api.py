@@ -79,11 +79,23 @@ def test_get_restaurants():
     
     print("Fetching the list of restaurants...")
     
+    # The API now returns paginated results
     response = requests.get(f"{API_BASE_URL}/restaurants")
     
     if response.status_code == 200:
-        restaurants = response.json()
-        print(f"Successfully retrieved {len(restaurants)} restaurants.")
+        response_data = response.json()
+        
+        # Check if the response has the new paginated structure
+        if isinstance(response_data, dict) and 'restaurants' in response_data:
+            restaurants = response_data['restaurants']
+            pagination = response_data.get('pagination', {})
+            total_restaurants = pagination.get('total', len(restaurants))
+            print(f"Successfully retrieved {len(restaurants)} restaurants (page 1 of {pagination.get('pages', 1)}).")
+            print(f"Total restaurants in database: {total_restaurants}")
+        else:
+            # Fallback for old API format
+            restaurants = response_data
+            print(f"Successfully retrieved {len(restaurants)} restaurants.")
         
         # Select a random restaurant
         if not restaurants:
@@ -100,31 +112,30 @@ def test_get_restaurants():
         
         if menu_response.status_code == 200:
             menu = menu_response.json()
-            print(f"\nMenu items available: {len(menu)}")
+            print(f"Menu items: {len(menu)}")
             
+            # Select random menu items for the order
             if not menu:
                 print("No menu items found for this restaurant.")
-                sys.exit(1)
-                
-            # Select random menu items (1-3)
-            num_items = min(random.randint(1, 3), len(menu))
-            selected_items = random.sample([item["_id"] for item in menu], num_items)
+                return None, []
             
-            print(f"\nSelected {num_items} random items from the menu:")
-            for item_id in selected_items:
-                item = next((i for i in menu if i["_id"] == item_id), None)
-                if item:
-                    print(f" - {item['name']} (${item['price']})")
+            # Select 1-3 random menu items
+            num_items = random.randint(1, min(3, len(menu)))
+            selected_items = random.sample(menu, num_items)
             
-            return restaurant['restaurant_id'], selected_items
+            print("\nSelected menu items for the order:")
+            for item in selected_items:
+                print(f"- {item.get('name', 'Unknown')} (ID: {item.get('_id', 'Unknown')})")
+            
+            return restaurant['restaurant_id'], [item.get('_id') for item in selected_items]
         else:
-            print(f"Error getting restaurant menu: {menu_response.status_code}")
-            print(menu_response.text)
-            sys.exit(1)
+            print(f"Failed to retrieve menu. Status code: {menu_response.status_code}")
+            print(f"Response: {menu_response.text}")
+            return None, []
     else:
-        print(f"Error getting restaurants: {response.status_code}")
-        print(response.text)
-        sys.exit(1)
+        print(f"Failed to retrieve restaurants. Status code: {response.status_code}")
+        print(f"Response: {response.text}")
+        return None, []
 
 def test_place_order(user_id, restaurant_id, items):
     """Test placing an order and return the created order ID."""
@@ -137,18 +148,19 @@ def test_place_order(user_id, restaurant_id, items):
     }
     
     print("Creating order with data:")
-    pretty_print_json(order_data)
+    print(json.dumps(order_data, indent=2))
     
-    response = requests.post(f"{API_BASE_URL}/orders", json=order_data, headers=HEADERS)
+    response = requests.post(f"{API_BASE_URL}/orders", json=order_data)
     
-    if response.status_code == 201:
+    # Accept both 200 and 201 status codes (201 is the correct code for resource creation)
+    if response.status_code in [200, 201]:
         order = response.json()
-        print("Order created successfully:")
-        pretty_print_json(order)
+        print("\nOrder created successfully:")
+        print(json.dumps(order, indent=2))
         return order["order_id"]
     else:
-        print(f"Error placing order: {response.status_code}")
-        print(response.text)
+        print(f"\nFailed to create order. Status code: {response.status_code}")
+        print(f"Response: {response.text}")
         sys.exit(1)
 
 def test_get_user_orders(user_id):
@@ -169,25 +181,24 @@ def test_get_user_orders(user_id):
         sys.exit(1)
 
 def test_get_recommendations(user_id):
-    """Test getting personalized restaurant recommendations."""
+    """Test getting restaurant recommendations based on order history."""
     print_separator("GETTING RESTAURANT RECOMMENDATIONS")
     
     print(f"Getting recommendations for user_id: {user_id}")
     print("This may take a few seconds as it calls the LLM API...")
     
-    response = requests.get(f"{API_BASE_URL}/users/{user_id}/recommendations")
+    # Use the new recommendations endpoint
+    response = requests.get(f"{API_BASE_URL}/recommendations?user_id={user_id}")
     
     if response.status_code == 200:
         recommendations = response.json()
         print("Recommendations received successfully:")
-        pretty_print_json(recommendations)
+        print(json.dumps(recommendations, indent=2))
+        return recommendations
     else:
-        print(f"Error getting recommendations: {response.status_code}")
-        print(response.text)
-        
-        if response.status_code == 503:
-            print("\nNOTE: This error is expected if you haven't set up the GROQ_API_KEY in your .env file.")
-            print("To enable recommendations, add your Groq API key to the .env file.")
+        print(f"Failed to get recommendations. Status code: {response.status_code}")
+        print(f"Response: {response.text}")
+        return None
 
 def test_get_order(order_id):
     """Test retrieving a specific order by ID."""

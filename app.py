@@ -8,6 +8,7 @@ from flask_cors import CORS
 from groq import Groq
 from dotenv import load_dotenv
 from db_manager import db
+from llm_tools import LLMToolsIntegration
 
 load_dotenv()
 
@@ -299,81 +300,46 @@ def get_order(order_id):
 
 # --- Recommendation Endpoints ---
 
-@app.route('/users/<user_id>/recommendations', methods=['GET'])
-def get_recommendations(user_id):
-    if not groq_client:
-        return jsonify({"error": "Recommendation service is not configured. Missing GROQ_API_KEY."}), 503
-
-    if user_id not in users:
-        return jsonify({"error": "User not found"}), 404
-
-    user_orders_ids = users[user_id].get('orders', [])
-    if not user_orders_ids:
-        return jsonify({"recommendation": "Not enough order history to provide a recommendation. Try ordering something first!"})
-
-    history_restaurants = set()
-    order_history_summary = []
-    for order_id in user_orders_ids:
-        order = orders.get(order_id)
-        if order:
-            restaurant = get_restaurant_by_id(order['restaurant_id'])
-            if restaurant:
-                history_restaurants.add(restaurant['name'])
-                ordered_items = [menu_item for menu_item in restaurant.get('menu', []) if menu_item.get('_id') in order.get('items', [])]
-                sections = set(item['section'] for item in ordered_items if 'section' in item)
-                if sections:
-                    order_history_summary.append(f"Ordered from sections '{', '.join(sections)}' at '{restaurant['name']}'.")
-
-    if not order_history_summary:
-        return jsonify({"recommendation": "Could not build valid order history."})
-
-    available_restaurants = [r for r in restaurants if r['name'] not in history_restaurants]
-    sample_size = min(30, len(available_restaurants))  # Send a sample of 30, or fewer if not enough are available
-    sampled_restaurants = random.sample(available_restaurants, sample_size)
-
-    available_restaurants_info = []
-    for r in sampled_restaurants:
-        all_sections = set(item.get('section') for item in r.get('menu', []) if item.get('section'))
-        if all_sections:
-            available_restaurants_info.append(f"- {r['name']} (offers: {', '.join(list(all_sections)[:3])})")
-
-    prompt = (
-        "# Restaurant Recommendation Assistant\n"
-        "You are an expert restaurant recommendation assistant with deep knowledge of culinary preferences and food pairing.\n"
-        "The current date is July 8, 2025.\n"
-        
-        "## Your Task\n"
-        "Based on the user's order history, suggest exactly 3 new restaurants for them to try.\n"
-        "Each recommendation should be thoughtfully selected based on the user's demonstrated preferences.\n"
-        "For each recommendation, provide a brief, specific reason why this restaurant would appeal to this particular user.\n"
-        "Focus on menu sections, cuisine types, and flavor profiles that align with their past orders.\n"
-        "Do not suggest any restaurants the user has already ordered from.\n"
-        
-        "## User Order History\n"
-        f"{'\n'.join(order_history_summary)}\n"
-        
-        "## Available Restaurants\n"
-        f"{'\n'.join(available_restaurants_info)}\n"
-        
-        "## Response Format\n"
-        "Provide exactly 3 recommendations in a simple, unnumbered list.\n"
-        "Each recommendation should include the restaurant name and a single concise sentence explaining why it matches this user's preferences.\n"
-        "Be decisive and confident in your selections - these are the perfect matches for this user.\n"
-        "Do not include any introductory or concluding text - just the three recommendations."
-    )
-
+@app.route('/recommendations', methods=['GET'])
+def get_recommendations():
+    """Returns restaurant recommendations based on user's order history using LLM function calling."""
+    user_id = request.args.get('user_id')
+    query = request.args.get('query', 'Give me restaurant recommendations based on my order history')
+    
+    if not user_id:
+        return jsonify({'error': 'User ID is required'}), 400
+    
+    # Get user's order history
+    user_orders = db.get_user_orders(user_id)
+    
+    if not user_orders:
+        return jsonify({
+            'text': 'Not enough order history to provide a recommendation. Try ordering something first!',
+            'recommendations': [],
+            'follow_up_question': 'Would you like to explore our most popular restaurants instead?'
+        })
+    
+    # Initialize the LLM tools integration
+    llm_tools = LLMToolsIntegration()
+    
+    # Prepare user context
+    user_context = {
+        "user_id": user_id,
+        "order_count": len(user_orders)
+    }
+    
+    # Generate recommendations using function calling
     try:
-        chat_completion = groq_client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": "You are a sophisticated restaurant recommendation assistant with expertise in culinary preferences, food pairing, and personalization. Your recommendations are thoughtful, specific, and tailored to each user's unique taste profile. You excel at identifying patterns in ordering behavior and suggesting new dining experiences that will delight users while expanding their culinary horizons."},
-                {"role": "user", "content": prompt}
-            ],
-            model="meta-llama/llama-4-scout-17b-16e-instruct",
-        )
-        recommendation = chat_completion.choices[0].message.content
-        return jsonify({"recommendation": recommendation})
+        # This now returns a structured JSON object with text, recommendations array, and follow-up question
+        recommendation_data = llm_tools.generate_recommendations(query, user_context)
+        return jsonify(recommendation_data)
     except Exception as e:
-        return jsonify({"error": f"Failed to get recommendation from LLM: {str(e)}"}), 500
+        print(f"Error generating recommendations: {str(e)}")
+        return jsonify({
+            'text': f'Failed to generate recommendation: {str(e)}',
+            'recommendations': [],
+            'follow_up_question': 'Would you like to try again with a different query?'
+        }), 500
 
 @app.route('/generate_options', methods=['POST'])
 def generate_options():
